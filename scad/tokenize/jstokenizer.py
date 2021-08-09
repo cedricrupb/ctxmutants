@@ -14,11 +14,13 @@ class NodeTokenizer:
     def __call__(self, node): return self.tokenize(node)
 
     def tokenize(self, node):
-        target_func = getattr(self, f"tokenize_{node.type}", None)
+        node_type = node.type if node is not None else "None"
+
+        target_func = getattr(self, f"tokenize_{node_type}", None)
         if target_func is not None:
             target_func(node)
         else:
-            raise ValueError("Cannot handle node type: %s" % type(node).__name__)
+            raise ValueError("Cannot handle node type: %s" % node_type)
 
     # Helpers --------------------------------------------------------------------
 
@@ -35,6 +37,10 @@ class NodeTokenizer:
             self.tokenize(e)
             if i != lastelem: self.state.add(divider) 
 
+    def tokenize_None(self, node):
+        # NOOP
+        pass
+
     # Identifier -----------------------------------------------------------------
 
     def tokenize_Identifier(self, node):
@@ -46,7 +52,7 @@ class NodeTokenizer:
         # Assume that all names follow convention
         # Therefore: USE => USE_TYPE if name is camel case
         if context == "USE":
-            if name[0].isupper() and name[1].islower():
+            if len(name) > 1 and name[0].isupper() and name[1].islower():
                 context = "USE_TYPE"
 
         ctx2id  = {"FUNC_DEF": TokenTypes.DEF_FUNC, 
@@ -172,7 +178,8 @@ class NodeTokenizer:
 
     def tokenize_ExpressionStatement(self, node):
         
-        self.tokenize(node.expression)
+        with self.state.new_ctx("USE"):
+            self.tokenize(node.expression)
         self.state.add(";")
 
 
@@ -323,19 +330,21 @@ class NodeTokenizer:
 
     def tokenize_BinaryExpression(self, node):
         
-        self.tokenize_subexpression(node.left)
-        self.state.add(node.operator, TokenTypes.BOP)
-        self.tokenize_subexpression(node.right)
+        with self.state.new_ctx("USE"):
+            self.tokenize_subexpression(node.left)
+            self.state.add(node.operator, TokenTypes.BOP)
+            self.tokenize_subexpression(node.right)
 
 
     def tokenize_UnaryExpression(self, node):
         
-        if node.prefix:
-            self.state.add(node.operator, TokenTypes.UOP)
-            self.tokenize_subexpression(node.argument)
-        else:
-            self.tokenize_subexpression(node.argument)
-            self.state.add(node.operator, TokenTypes.UOP)
+        with self.state.new_ctx("USE"):
+            if node.prefix:
+                self.state.add(node.operator, TokenTypes.UOP)
+                self.tokenize_subexpression(node.argument)
+            else:
+                self.tokenize_subexpression(node.argument)
+                self.state.add(node.operator, TokenTypes.UOP)
 
 
     def tokenize_ThisExpression(self, node):
@@ -355,10 +364,13 @@ class NodeTokenizer:
         if node.isAsync:
             self.state.add("async", TokenTypes.KEYWORDS)
 
-        if node.generator:
-            self.state.add("function*", TokenTypes.KEYWORDS)
-        else:
-            self.state.add("function", TokenTypes.KEYWORDS)
+        context = self.state.context
+
+        if context is None or context != "INNER_FUNC":
+            if node.generator:
+                self.state.add("function*", TokenTypes.KEYWORDS)
+            else:
+                self.state.add("function", TokenTypes.KEYWORDS)
 
         with self.brackets():
             with self.state.new_ctx("Param"):
@@ -440,10 +452,10 @@ class NodeTokenizer:
             self.tokenize(node.argument)
 
     def tokenize_LogicalExpression(self, node):
-        
-        self.tokenize_subexpression(node.left)
-        self.state.add(node.operator, TokenTypes.BOP)
-        self.tokenize_subexpression(node.right)
+        with self.state.new_ctx("USE"):
+            self.tokenize_subexpression(node.left)
+            self.state.add(node.operator, TokenTypes.BOP)
+            self.tokenize_subexpression(node.right)
 
 
     def tokenize_ConditionalExpression(self, node):
@@ -516,23 +528,138 @@ class NodeTokenizer:
         with self.state.new_ctx("USE"):
             self.tokenize(node.value)
 
+    def tokenize_ObjectPattern(self, node):
+
+        with self.brackets("{", "}"):
+            self.tokenize_List(node.properties)
+
+    def tokenize_ArrayPattern(self, node):
+        with self.brackets("[", "]"):
+            self.tokenize_List(node.elements)
+
+    def tokenize_AssignmentPattern(self, node):
+        with self.brackets():
+
+            self.tokenize(node.left)
+            self.state.add("=")
+            self.tokenize(node.right)
+
+    def tokenize_RestElement(self, node):
+        self.state.add("...")
+        self.tokenize(node.argument)
+
+    def tokenize_SpreadElement(self, node):
+        self.state.add("...")
+        self.tokenize(node.argument)
+
+
+    def tokenize_ClassExpression(self, node):
+        self.state.add("class", TokenTypes.KEYWORDS)
+
+        self.tokenize(node.id)
+
+        if node.superClass is not None:
+            self.state.add("extends", TokenTypes.KEYWORDS)
+            self.tokenize(node.superClass)
+
+        self.tokenize(node.body)
+
+
+    def tokenize_Program(self, node):
+
+        for element in node.body: 
+            self.tokenize(element)
+
+    def tokenize_ClassDeclaration(self, node):
+        self.state.add("class", TokenTypes.KEYWORDS)
+
+        with self.state.new_ctx("NAME"):
+            self.tokenize(node.id)
+
+        self.tokenize(node.body)
+
+    def tokenize_ClassBody(self, node):
+        with self.brackets("{", "}"):
+
+            for method in node.body:
+                self.tokenize(method)
+
+    def tokenize_MethodDefinition(self, node):
+        
+        if node.kind != "method":
+            self.state.add(node.kind, TokenTypes.KEYWORDS)
+
+        if node.kind != "constructor":
+            with self.state.new_ctx("FUNC_DEF"):
+                self.tokenize(node.key)
+
+        with self.state.new_ctx("INNER_FUNC"):
+            self.tokenize(node.value)
+
+
+def search(node, types):
+
+    queue = [node]
+
+    while len(queue) > 0:
+        node = queue.pop(0)
+        
+        if node.type in types:
+            yield node
+            continue
+            
+        for child_key in dir(node):
+            child = getattr(node, child_key)
+            
+            if hasattr(child, "kind"):
+                queue.append(child)
+            elif isinstance(child, list):
+                queue.extend(child)
+
+
+def try_parse_wrap(code):
+    try:
+        return esprima.parseScript(code)
+    except esprima.Error:
+        # Maybe the function is anonym
+        code = "let x = %s" % code
+        return esprima.parseScript(code)
 
 
 def func_tokenize(code):
     
-    tree = esprima.parseScript(code)
+    tree = try_parse_wrap(code)
 
     method_defs = {}
 
-    for node in tree.body:
-        if node.type != "FunctionDeclaration": continue
-    
+    for node in search(tree, ["FunctionDeclaration", "MethodDefinition", "FunctionExpression"]):
+
+        if node.type == "FunctionDeclaration":
+            name = node.id.name
+        if node.type == "MethodDefinition":
+            if node.kind == "constructor":
+                name = "constructor"
+            else:
+                name = node.key.name  
+        if node.type == "FunctionExpression":
+            name = "anonym"
+
         state = TokenizationState()
         NodeTokenizer(state)(node)
 
-        method_defs[node.id.name] = {
+        method_defs[name] = {
             "tokens": state.tokens,
             "types" : state.type_ids
         }
-    
+
     return method_defs
+
+
+def full_tokenize(code):
+
+    tree = esprima.parseScript(code)
+
+    state = TokenizationState()
+    NodeTokenizer(state)(tree)
+    
+    return {"tokens": state.tokens, "types": state.type_ids}

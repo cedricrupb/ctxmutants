@@ -90,6 +90,9 @@ class NodeTokenizer:
     def tokenize_Semicolon(self, node):
         self.state.add(";")
 
+    def tokenize_Colon(self, node):
+        self.state.add(",")
+
     # Brackets ----------------------------------------------------------------
     def tokenize_LeftParen(self, node):
         self.state.add("(")
@@ -119,12 +122,6 @@ class NodeTokenizer:
         name    = node.value
         context = state.context
 
-        # Assume that all names follow convention
-        # Therefore: USE => USE_TYPE if name is camel case
-        if context == "USE":
-            if name[0].isupper() and name[1].islower():
-                context = "USE_TYPE"
-
         ctx2id  = {"FUNC_DEF": TokenTypes.DEF_FUNC, 
                     "Param": TokenTypes.DEF_VAR, 
                     "Annotation": TokenTypes.USE_TYPE,
@@ -132,7 +129,19 @@ class NodeTokenizer:
                     "USE": TokenTypes.USE_VAR,
                     "DEF": TokenTypes.DEF_VAR,
                     "ATTR": TokenTypes.ATTR,
-                    "USE_TYPE": TokenTypes.USE_TYPE}
+                    "USE_TYPE": TokenTypes.USE_TYPE,
+                    "NAME": TokenTypes.NAME}
+
+        if name in ["None", "True", "False"]:
+            self.state.add(name, TokenTypes.KEYWORDS)
+            return
+
+        # Assume that all names follow convention
+        # Therefore: USE => USE_TYPE if name is camel case
+        if context == "USE":
+            if len(name) > 2 and name[0].isupper() and name[1].islower():
+                context = "USE_TYPE"
+
         type_id = ctx2id[context]
 
         with self.parenthesize(node):
@@ -210,20 +219,27 @@ class NodeTokenizer:
 
     def tokenize_Yield(self, node):
         self.state.add("yield", TokenTypes.KEYWORDS)
-        self.tokenize(node.value)
+
+        with self.state.new_ctx("USE"):
+            self.tokenize(node.value)
 
     def tokenize_From(self, node):
         self.state.add("from", TokenTypes.KEYWORDS)
-        self.tokenize(node.item)
+
+        with self.state.new_ctx("USE"):
+            self.tokenize(node.item)
 
     def tokenize_IfExp(self, node):
         state = self.state
         with self.parenthesize(node):
             self.tokenize(node.body)
             state.add("if", TokenTypes.KEYWORDS)
-            self.tokenize(node.test)
+            with self.state.new_ctx("USE"):
+                self.tokenize(node.test)
+
             state.add("else", TokenTypes.KEYWORDS)
-            self.tokenize(node.orelse)
+            with self.state.new_ctx("USE"):
+                self.tokenize(node.orelse)
 
     # Lambda and Fn -------------------------
 
@@ -312,7 +328,8 @@ class NodeTokenizer:
 
         state.add("{")
 
-        self.tokenize(node.expression)
+        with self.state.new_ctx("USE"):
+            self.tokenize(node.expression)
 
         equal = node.equal
         if equal is not None:
@@ -416,26 +433,29 @@ class NodeTokenizer:
 
     # Comprehension ------------------------------------
 
-    def tokenize_GeneratorExpr(self, node):
+    def tokenize_GeneratorExp(self, node):
         with self.parenthesize(node):
             self.tokenize(node.elt)
             self.tokenize(node.for_in)
     
     def tokenize_ListComp(self, node):
         with self.parenthesize(node), self.brackets(node):
-            self.tokenize(node.elt)
+            with self.state.new_ctx("USE"):
+                self.tokenize(node.elt)
             self.tokenize(node.for_in)
 
     def tokenize_SetComp(self, node):
         with self.parenthesize(node), self.braces(node):
-            self.tokenize(node.elt)
+            with self.state.new_ctx("USE"):
+                self.tokenize(node.elt)
             self.tokenize(node.for_in)
 
     def tokenize_DictComp(self, node):
         with self.parenthesize(node), self.braces(node):
-            self.tokenize(node.key)
-            self.state.add(":")
-            self.tokenize(node.value)
+            with self.state.new_ctx("USE"):
+                self.tokenize(node.key)
+                self.state.add(":")
+                self.tokenize(node.value)
             self.tokenize(node.for_in)
 
     def tokenize_CompFor(self, node):
@@ -447,11 +467,13 @@ class NodeTokenizer:
 
         state.add("for", TokenTypes.KEYWORDS)
 
-        self.tokenize(node.target)
+        with self.state.new_ctx("DEF"):
+            self.tokenize(node.target)
 
         state.add("in", TokenTypes.KEYWORDS)
-    
-        self.tokenize(node.iter)
+
+        with self.state.new_ctx("USE"):    
+            self.tokenize(node.iter)
         ifs = node.ifs
         for if_clause in ifs:
             self.tokenize(if_clause)
@@ -462,7 +484,9 @@ class NodeTokenizer:
     def tokenize_CompIf(self, node):
         state = self.state
         state.add("if", TokenTypes.KEYWORDS)
-        self.tokenize(node.test)
+
+        with self.state.new_ctx("USE"):
+            self.tokenize(node.test)
 
     def tokenize_NamedExpr(self, node):
         with self.parenthesize(node):
@@ -472,16 +496,18 @@ class NodeTokenizer:
             with self.state.new_ctx("USE"):
                 self.tokenize(node.value)
 
+
     # Subscript ------------------------------
     
     def tokenize_Subscript(self, node):
-        with self.parenthesize(node):
-            self.tokenize(node.value)
-            self.tokenize(node.lbracket)
-            for slice in node.slice:
-                self.tokenize(slice)
-            
-            self.tokenize(node.rbracket)
+        with self.state.new_ctx("USE"):
+            with self.parenthesize(node):
+                self.tokenize(node.value)
+                self.tokenize(node.lbracket)
+                for slice in node.slice:
+                    self.tokenize(slice)
+                
+                self.tokenize(node.rbracket)
     
     def tokenize_Index(self, node):
         with self.state.new_ctx("USE"):
@@ -501,12 +527,12 @@ class NodeTokenizer:
             self.tokenize(upper)
 
         second_colon = node.second_colon
-        if second_colon is MaybeSentinel.DEFAULT and self.step is not None:
+        if second_colon is MaybeSentinel.DEFAULT and node.step is not None:
             state.add(":")
         else:
             self.tokenize(second_colon)
             
-        step = self.step
+        step = node.step
         if step is not None:
             self.tokenize(step)
 
@@ -541,12 +567,14 @@ class NodeTokenizer:
         state = self.state
 
         state.add("assert", TokenTypes.KEYWORDS)
-        self.tokenize(node.test)
+        with self.state.new_ctx("USE"):
+            self.tokenize(node.test)
 
         msg = node.msg
         if msg is not None:
             state.add(",")
-            self.tokenize(msg)
+            with self.state.new_ctx("USE"):
+                self.tokenize(msg)
         
         self.tokenize(node.semicolon)
 
@@ -588,7 +616,8 @@ class NodeTokenizer:
 
     def tokenize_Del(self, node):
         self.state.add("del", TokenTypes.KEYWORDS)
-        self.tokenize(node.target)
+        with self.state.new_ctx("USE"):
+            self.tokenize(node.target)
         self.tokenize(node.semicolon)
 
     def tokenize_Expr(self, node):
@@ -630,7 +659,8 @@ class NodeTokenizer:
         state.add("raise", TokenTypes.KEYWORDS)
 
         if exc is not None:
-            self.tokenize(exc)
+            with self.state.new_ctx("USE"):
+                self.tokenize(exc)
         
         if cause is not None:
             self.tokenize(cause)
@@ -776,11 +806,13 @@ class NodeTokenizer:
         self.tokenize(node.body)
 
     def tokenize_WithItem(self, node):
-        self.tokenize(node.item)
+        with self.state.new_ctx("USE"):
+            self.tokenize(node.item)
 
         asname = node.asname
         if asname is not None:
-            self.tokenize(asname)
+            with self.state.new_ctx("DEF"):
+                self.tokenize(asname)
 
         if node.comma is not None:
             self.tokenize(node.comma)
@@ -940,6 +972,60 @@ class NodeTokenizer:
         for statement in node.body:
             self.tokenize(statement)
         self.state.newline()
+
+    def tokenize_ImportFrom(self, node):
+
+        if node.module is not None:
+            self.state.add("from", TokenTypes.KEYWORDS)
+            with self.state.new_ctx("NAME"):
+                self.tokenize(node.module)
+
+        self.state.add("import", TokenTypes.KEYWORDS)
+
+        try:
+            last_name = len(node.names) - 1
+            for i, name in enumerate(node.names):
+                self.tokenize(name)
+                if i != last_name: self.state.add(",")
+        except TypeError:
+            if node.names is not None: self.state.add("*")
+
+    def tokenize_Import(self, node):
+        self.state.add("import", TokenTypes.KEYWORDS)
+        last_name = len(node.names) - 1
+        for i, name in enumerate(node.names):
+            self.tokenize(name)
+            if i != last_name: self.state.add(",")
+
+    def tokenize_ImportAlias(self, node):
+
+        with self.state.new_ctx("NAME"):
+            self.tokenize(node.name)
+        
+        if node.asname is not None:
+            self.state.add("as", TokenTypes.KEYWORDS)
+            
+            with self.state.new_ctx("NAME"):
+                self.tokenize(node.asname)
+
+    def tokenize_ClassDef(self, node):
+        self.state.add("class", TokenTypes.KEYWORDS)
+
+        with self.state.new_ctx("USE_TYPE"):
+            self.tokenize(node.name)
+        
+        if node.bases:
+            self.state.add("(")
+            last_base = len(node.bases) - 1
+            for i, base in enumerate(node.bases):
+                self.tokenize(base)
+                if i != last_base: self.state.add(",")
+
+            self.state.add(")")
+
+        self.state.add(":")
+        self.tokenize(node.body)
+
 
 
 def func_tokenize(code):

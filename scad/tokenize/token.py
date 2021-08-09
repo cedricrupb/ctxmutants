@@ -1,5 +1,7 @@
+from enum import IntEnum
 
-class TokenTypes:
+
+class TokenTypes(IntEnum):
 
     SYNTAX    = 0
     KEYWORDS  = 1
@@ -14,6 +16,8 @@ class TokenTypes:
     LIT_STRING= 10
     LIT_NUMBER= 11
     NAME      = 12
+
+
 
 
 class _TokenContext:
