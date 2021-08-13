@@ -1,4 +1,5 @@
 import javalang
+import re
 
 from contextlib import contextmanager
 
@@ -48,11 +49,13 @@ class NodeTokenizer:
             self.tokenize(e)
             if i != lastelem: self.state.add(divider) 
 
+
     @contextmanager
     def brackets(self, lpar = "(", rpar = ")"):
         self.state.add(lpar)
         yield
         self.state.add(rpar)
+
 
     @contextmanager
     def pre_post(self, node):
@@ -60,8 +63,11 @@ class NodeTokenizer:
         if node.prefix_operators is not None:
             for op in node.prefix_operators:
                 self.state.add(op, TokenTypes.UOP)
-        
+
         yield
+
+        if hasattr(node, "selectors") and node.selectors is not None:
+            self.tokenize_selectors(node)
 
         if node.postfix_operators is not None:
             for op in node.postfix_operators:
@@ -103,7 +109,7 @@ class NodeTokenizer:
         if node.selectors is not None:
             for selector in node.selectors:
                 
-                if type(selector).__name__ == "MemberReference":
+                if type(selector).__name__ in ["MemberReference", "MethodInvocation"]:
                     self.state.add(".")
 
                 self.tokenize(selector)
@@ -125,6 +131,25 @@ class NodeTokenizer:
                         self.tokenize_body(statement)
                     else:
                         self.tokenize(statement)
+
+
+    def tokenize_dimensions(self, node):
+        if node.dimensions is not None:
+            for d in node.dimensions:
+                if d is None:
+                    self.state.add("[]")
+                else:
+                    with self.brackets("[", "]"):
+                        self.tokenize(d)
+
+    
+    def tokenize_operand(self, node):
+        name = type(node).__name__
+
+        if name in ["BinaryOperation", "Assignment", "TernaryExpression"]:
+            with self.brackets(): self.tokenize(node)
+        else:
+            self.tokenize(node)
 
 
     def tokenize_NoneType(self, node):
@@ -159,38 +184,28 @@ class NodeTokenizer:
 
     def tokenize_BasicType(self, node):
         self.state.add(node.name, TokenTypes.USE_TYPE)
-
-        if node.dimensions is not None:
-            for d in node.dimensions:
-                if d is None:
-                    self.state.add("[]")
-                else:
-                    self.state.add("[")
-                    self.tokenize(d)
-                    self.state.add("]")
+        self.tokenize_dimensions(node)
 
     def tokenize_ReferenceType(self, node):
         self.state.add(node.name, TokenTypes.USE_TYPE)
-
-        if node.sub_type is not None:
-            self.state.add(".")
-            self.tokenize(node.sub_type)
         
         if node.arguments is not None:
             with self.brackets("<", ">"):
                 self.tokenize_List(node.arguments)
 
-        if node.dimensions is not None:
-            for d in node.dimensions:
-                if d is None:
-                    self.state.add("[]")
-                else:
-                    with self.brackets("[", "]"):
-                        self.tokenize(d)
+        self.tokenize_dimensions(node)
+
+        if node.sub_type is not None:
+            self.state.add(".")
+            self.tokenize(node.sub_type)
 
 
     def tokenize_TypeParameter(self, node):
-        raise NotImplementedError(str(node))
+        self.state.add(node.name, TokenTypes.NAME)
+
+        if node.extends is not None:
+            self.state.add("extends", TokenTypes.KEYWORDS)
+            self.tokenize_List(node.extends, "&")
 
 
     # Parameter --------------------------------
@@ -238,10 +253,8 @@ class NodeTokenizer:
     def tokenize_VariableDeclarator(self, node):
         self.state.add(node.name, TokenTypes.DEF_VAR)
         self.scope.add(node.name)
+        self.tokenize_dimensions(node)
 
-        if node.dimensions is not None:
-            self.tokenize_List(node.dimensions)
-        
         if node.initializer is not None:
             self.state.add("=")
             self.tokenize(node.initializer)
@@ -370,11 +383,11 @@ class NodeTokenizer:
             for catch in node.catches:
                 self.tokenize(catch)
 
-            if node.finally_block is not None:
-                self.state.add("finally", TokenTypes.KEYWORDS)
-                with self.brackets("{", "}"):
-                    for statement in node.finally_block:
-                        self.tokenize(statement)
+        if node.finally_block is not None:
+            self.state.add("finally", TokenTypes.KEYWORDS)
+            with self.brackets("{", "}"):
+                for statement in node.finally_block:
+                    self.tokenize(statement)
 
     def tokenize_SwitchStatement(self, node):
         self.tokenize_label(node)
@@ -493,11 +506,16 @@ class NodeTokenizer:
 
     def tokenize_MethodInvocation(self, node):
 
+
         with self.pre_post(node):
 
             if node.qualifier is not None and len(node.qualifier) > 0:
                 self.tokenize_qualifier(node.qualifier, self._identify_name) 
                 self.state.add(".")
+
+            if node.type_arguments is not None:
+                with self.brackets("<", ">"):
+                    self.tokenize_List(node.type_arguments)
 
             self.state.add(node.member, TokenTypes.CALL_FUNC)
 
@@ -529,7 +547,6 @@ class NodeTokenizer:
             with self.brackets():
                 self.tokenize_List(node.arguments)
             
-            self.tokenize_selectors(node)
 
 
     def tokenize_Assignment(self, node):
@@ -542,27 +559,17 @@ class NodeTokenizer:
         with self.state.new_ctx("USE"):
             self.tokenize(node.value)
 
-
     def tokenize_TernaryExpression(self, node):
         with self.state.new_ctx("USE"):
-            self.tokenize(node.condition)
+            self.tokenize_operand(node.condition)
             self.state.add("?")
-            self.tokenize(node.if_true)
+            self.tokenize_operand(node.if_true)
             self.state.add(":")
-            self.tokenize(node.if_false)
-
-    def tokenize_operand(self, node):
-        name = type(node).__name__
-
-        if name in ["BinaryOperation"]:
-            with self.brackets(): self.tokenize(node)
-        else:
-            self.tokenize(node)
+            self.tokenize_operand(node.if_false)
 
 
     def tokenize_BinaryOperation(self, node):
         with self.state.new_ctx("USE"):
-
             self.tokenize_operand(node.operandl)
             self.state.add(node.operator, TokenTypes.BOP)
             self.tokenize_operand(node.operandr)
@@ -571,7 +578,7 @@ class NodeTokenizer:
     def tokenize_Cast(self, node):
         with self.brackets(): 
             self.tokenize(node.type)
-        self.tokenize(node.expression)
+        self.tokenize_operand(node.expression)
 
     def tokenize_MethodReference(self, node):
         self.tokenize(node.expression)
@@ -608,9 +615,11 @@ class NodeTokenizer:
 
     def tokenize_This(self, node):
         with self.pre_post(node):
+            if node.qualifier is not None:
+                self.tokenize_qualifier(node. qualifier, self._identify_name)
+                self.state.add(".")
 
             self.state.add("this", TokenTypes.KEYWORDS)
-            self.tokenize_selectors(node)
 
 
     def tokenize_MemberReference(self, node):
@@ -620,7 +629,6 @@ class NodeTokenizer:
             if node.qualifier is not None and len(node.qualifier) > 0: 
                 member_name = node.qualifier + "." + member_name
             self.tokenize_qualifier(member_name, self._identify_name)
-            self.tokenize_selectors(node)
 
 
     def tokenize_SuperMemberReference(self, node):
@@ -629,7 +637,6 @@ class NodeTokenizer:
             self.state.add("super", TokenTypes.KEYWORDS)
             self.state.add(".")
             self.state.add(node.member, TokenTypes.ATTR)
-            self.tokenize_selectors(node)
 
     def tokenize_ArraySelector(self, node):
         with self.brackets("[", "]"):
@@ -638,9 +645,13 @@ class NodeTokenizer:
 
     def tokenize_ClassReference(self, node):
         with self.pre_post(node):
+            
+            if node.qualifier is not None and len(node.qualifier) > 0:
+                self.tokenize_qualifier(node.qualifier, self._identify_name)
+                self.state.add(".")
+
             self.tokenize(node.type)
             self.state.add(".class", TokenTypes.KEYWORDS)
-            self.tokenize_selectors(node)
 
 
     def tokenize_VoidClassReference(self, node):
@@ -677,7 +688,6 @@ class NodeTokenizer:
                     self.state.add("]")
 
             self.tokenize(node.initializer)
-            self.tokenize_selectors(node)
 
     def tokenize_ArrayInitializer(self, node):
         with self.brackets("{", "}"):
@@ -698,8 +708,6 @@ class NodeTokenizer:
             if node.body is not None:
                 self.tokenize_body(node.body)
 
-            self.tokenize_selectors(node)
-
 
     def tokenize_ClassCreator(self, node):
         with self.pre_post(node):
@@ -711,8 +719,6 @@ class NodeTokenizer:
 
             if node.body is not None:
                 self.tokenize_body(node.body)
-
-            self.tokenize_selectors(node)
             
             if node.constructor_type_arguments is not None:
                 raise NotImplementedError("Constructor type arguments: "+ str(node))
@@ -726,6 +732,8 @@ class NodeTokenizer:
     # Declaration --------------------------------
 
     def tokenize_MethodDeclaration(self, node):
+        if node.documentation is not None:
+            self.state.add(node.documentation)
 
         for annotation in node.annotations:
             self.tokenize(annotation)
@@ -734,6 +742,10 @@ class NodeTokenizer:
                              "final", "abstract", "transient", "synchronized", "volatile"]:
             if modifier in node.modifiers:
                 self.state.add(modifier, TokenTypes.KEYWORDS)
+
+        if node.type_parameters is not None:
+            with self.brackets("<", ">"):
+                self.tokenize_List(node.type_parameters)
 
         if node.return_type is None:
             self.state.add("void", TokenTypes.USE_TYPE)
@@ -760,6 +772,8 @@ class NodeTokenizer:
         self.tokenize_body(node.body)
 
     def tokenize_FieldDeclaration(self, node):
+        if node.documentation is not None:
+            self.state.add(node.documentation)
         
         for annotation in node.annotations:
             self.tokenize(annotation)
@@ -825,23 +839,107 @@ class NodeTokenizer:
         self.tokenize_body(node.body)
 
 
+typing_pattern  = re.compile("\.<[A-Z].*>")
+typing_pattern2 = re.compile("::<[A-Z].*>")
+
+def _code_preprocess(code):
+    """
+    Javalang does not support typed method calls until now
+    Issue: https://github.com/c2nes/javalang/issues/105
+
+    Since the call structure is more important than the typing, we remove the typing
+    """
+    code = typing_pattern.sub(".", code)
+    code = typing_pattern2.sub("::", code)
+    return code
 
 
+def _parse(code):
+    code = _code_preprocess(code)
+
+    return javalang.parse.parse(code)
+
+
+def _method_trees(code):
+    tree = _parse(code)
+
+    for _, node in tree.filter(javalang.tree.MethodDeclaration):
+        yield node.name, node
 
 
 def method_tokenize(code):
-    tree = javalang.parse.parse(code)
 
     method_defs = {}
 
-    for _, node in tree.filter(javalang.tree.MethodDeclaration):
+    for name, subtree in _method_trees(code):
 
         state = TokenizationState()
-        NodeTokenizer(state)(node)
+        NodeTokenizer(state)(subtree)
 
-        method_defs[node.name] = {
+        method_defs[name] = {
             "tokens": state.tokens,
             "types" : state.type_ids
         }
     
     return method_defs
+
+
+
+# Debug option --------------------------------------------------------------
+
+
+def _is_isomorph(source_tree, target_tree):
+
+    if type(source_tree).__name__ != type(target_tree).__name__:
+        return False
+
+    if hasattr(source_tree, "children"):
+        if not hasattr(target_tree, "children"): return False
+        source_tree = source_tree.children
+        target_tree = target_tree.children
+
+    if isinstance(source_tree, str):
+        return source_tree == target_tree
+
+    try:
+        if len(source_tree) != len(target_tree): return False
+
+        for i, source in enumerate(source_tree):
+            target = target_tree[i]
+            if not _is_isomorph(source, target): return False
+        
+        return True
+    except TypeError:
+        return source_tree == target_tree
+
+
+def check_parsable(code, raise_error = False):
+    """
+    Parses a given code twice to AST (once before tokenization, once after).
+    The resulting trees have to be isomorp to each other.
+    """
+    tokenization = method_tokenize(code)
+    source_trees = {k: v for k, v in _method_trees(code)}
+
+    # Now parse the tokenized code
+    target_trees = {}
+
+    for name, tokenization_result in tokenization.items():
+        tokens = tokenization_result["tokens"]
+        token_code = " ".join(tokens)
+        dummy_code = "public class Test { %s }" % token_code # Necessary for being parsable in Java
+        token_trees = {k: v for k, v in _method_trees(dummy_code)}
+        target_trees[name] = token_trees[name]
+
+    # Check whether all trees are isomorph
+    for name, source_tree in source_trees.items():
+        target_tree = target_trees[name]
+
+        if not _is_isomorph(source_tree, target_tree):
+
+            if raise_error:
+                raise ValueError("The result before and after tokenization differ for function %s! " % name)
+            else:
+                return False
+
+    return True
