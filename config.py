@@ -22,6 +22,7 @@ class TrainConfig(Configuration):
         self.model_name = model_name
         self.data_dir   = data_dir
 
+        self.model_type = "pointer"
         self.model_size = "great"
         
         self.do_train = False
@@ -55,6 +56,7 @@ class TrainConfig(Configuration):
 
         # Custom model options
 
+        self.target_path = ""
         self.random_offsets = False
         self.sinoid_pos = False
 
@@ -66,6 +68,33 @@ class TrainConfig(Configuration):
         self.no_cuda = False
 
         super().__init__(**kwargs)
+
+
+class InferenceConfig(Configuration):
+
+    def __init__(self, model_path, data_dir, example_path, **kwargs):
+
+        self.model_path = model_path
+        self.data_dir = data_dir
+        self.example_path = example_path
+
+        self.model_type = "pointer"
+        self.model_size = "great"
+
+        self.max_test_length = 512
+        self.vocab_path = os.path.join(data_dir, "vocab.txt")
+
+        # Custom model options
+
+        self.target_path = ""
+        self.random_offsets = False
+        self.sinoid_pos = False
+        self.bpe_cutoff = 10
+
+        self.no_cuda = False
+
+        super().__init__(**kwargs)
+
 
 # Argparse Utils ----------------------------------------------------------------
 
@@ -101,4 +130,7 @@ def _bootstrap_config(config_cls):
 
 def train_config_from_args():
     return _from_args(*_bootstrap_config(TrainConfig))
+
+def inference_config_from_args():
+    return _from_args(*_bootstrap_config(InferenceConfig))
 

@@ -20,12 +20,15 @@ from config import train_config_from_args
 from scad.data import Vocabulary, BPEEncoder
 from scad.data import BufferingDataset
 
-from scad.data import VarMisuseDataset
+from scad.data import VarMisuseDataset, VarMisuseVocabDataset
 
 from scad.modelling import TransformerConfig
 from scad.modelling import TransformerEncoder
 
 from scad.modelling import VarMisuseModel
+from scad.modelling import VarMisuseTargetedModel
+from scad.modelling import VarMisusePointerModel
+from scad.modelling import LocateRepairModel
 
 from transformers import get_linear_schedule_with_warmup
 
@@ -53,6 +56,7 @@ def create_transformer_config(config):
             ffn_size=2048,
             max_length=config.max_test_length,
             sinoid=config.sinoid_pos,
+            decoder_vocab_size=config.target_size
         )
 
     if config.model_size == "debug":
@@ -63,6 +67,7 @@ def create_transformer_config(config):
             ffn_size=64,
             max_length=config.max_test_length,
             sinoid=config.sinoid_pos,
+            decoder_vocab_size=config.target_size
         )
 
 
@@ -98,7 +103,10 @@ def init_train_loader(config, data_path):
     files = glob(os.path.join(data_path, "*"))
     files = [f for f in files if os.path.isfile(f)]
 
-    dataset = VarMisuseDataset(files, config.encoder)
+    if config.target_size > 0:
+        dataset = VarMisuseVocabDataset(files, config.encoder, config.targets, cutoff = config.bpe_cutoff)
+    else:
+        dataset = VarMisuseDataset(files, config.encoder, cutoff = config.bpe_cutoff)
 
     logger.info("Use token batching...")
     loading_set = BufferingDataset(
@@ -119,7 +127,11 @@ def init_test_loader(config, data_path, full_run = False):
     logger.info("Index dev dataset...")
     files = glob(os.path.join(data_path, "*"))
     files = [f for f in files if os.path.isfile(f)]
-    dataset = VarMisuseDataset(files, config.encoder)
+
+    if config.target_size > 0:
+        dataset = VarMisuseVocabDataset(files, config.encoder, config.targets, cutoff = config.bpe_cutoff)
+    else:
+        dataset = VarMisuseDataset(files, config.encoder, cutoff = config.bpe_cutoff)
 
     num_samples = config.num_validate_samples if not full_run else -1
 
@@ -142,8 +154,23 @@ def setup_model(config):
     t_config = create_transformer_config(config)
     t_encoder = TransformerEncoder(t_config)
 
-    logger.info("Apply Transformer with the Locate Pointer head...")
-    return VarMisuseModel(t_config, t_encoder)
+    if config.model_type == "pointer":
+        logger.info("Apply Transformer with the Locate Pointer head...")
+        return VarMisuseModel(t_config, t_encoder)
+    
+    if config.model_type == "targeted_model":
+        logger.info("Apply Transformer with the Targeted Repair head...")
+        return VarMisuseTargetedModel(t_config, t_encoder)
+
+    if config.model_type == "pointer_net":
+        logger.info("Apply Transformer with the PointerNet head...")
+        return VarMisusePointerModel(t_config, t_encoder)
+
+    if config.model_type == "loc_repair":
+        logger.info("Apply Transformer with generic localization and repair head...")
+        return LocateRepairModel(t_config, t_encoder)
+
+    raise ValueError("Unknown model type: %s" % config.model_type)
 
 
 def save_checkpoint(config, model, num_steps, quality=-1):
@@ -183,7 +210,11 @@ def train_step(config, model, batch):
     repair_labels   = batch.repair
     token_mask      = batch.mask
 
-    labels = torch.stack([location_labels, repair_labels], dim=1)
+    if hasattr(batch, 'labels'):
+        target_labels = batch.labels
+        labels = torch.stack([location_labels, repair_labels, target_labels], dim = 1)
+    else:
+        labels = torch.stack([location_labels, repair_labels], dim=1)
     
     loss, logits = model(batch.input_ids,
                             token_mask = token_mask,
@@ -241,9 +272,8 @@ def train(config, model):
     batch_iter = cycle_batch()
     T = trange(config.num_train_steps)
 
-    batch = next(batch_iter)
-
     for ts in T:
+        batch = next(batch_iter)
 
         cum_tokens += batch.input_ids.numel()
 
@@ -287,8 +317,11 @@ def validate_step(config, log, model, batch):
     token_mask      = batch.mask
 
     with torch.no_grad():
-
-        labels = torch.stack([location_labels, repair_labels], dim=1)
+        if hasattr(batch, 'labels'):
+            target_labels = batch.labels
+            labels = torch.stack([location_labels, repair_labels, target_labels], dim = 1)
+        else:
+            labels = torch.stack([location_labels, repair_labels], dim=1)
     
         loss, logits = model(batch.input_ids,
                                 token_mask = token_mask,
@@ -320,21 +353,27 @@ def test(config, model):
     dev_loader = init_test_loader(config, config.test_dir, full_run=True)
     model = model.to(config.device)
     
-    T = tqdm(dev_loader)
+    T = tqdm(dev_loader, total = 755_000)
 
     log = AvgBackend()
+
 
     for batch in T:
         add_position_ids(config, batch)
         batch = batch.to(config.device)
         validate_step(config, log, model, batch)
-        T.set_description("Loss: %f" % log["loss"])
+
+        T.set_description("Loss: %f LocRepair: %f" % (log["loss"], log["loc_repair_acc"]))
+        T.update(batch.shape[0])
 
     return log.avg_scores()
 
 # Main setup -------------------------------------------------------------------
 def init_config():
     config = train_config_from_args()
+
+    # Test length should be larger equal max sequence length
+    config.max_test_length = max(config.max_sequence_length, config.max_test_length)
 
     # Vocabulary ---
     vocabulary = Vocabulary()
@@ -347,6 +386,18 @@ def init_config():
     logger.info("Load vocabulary with %d tokens..." % len(vocabulary))
 
     config.encoder = BPEEncoder(vocabulary)
+    config.target_size = 0
+
+    # Targets
+    if len(config.target_path) > 0:
+        targets = Vocabulary()
+        targets.load(config.target_path)
+        targets.close()
+
+        config.targets = targets
+        config.target_size = len(targets)
+
+        logger.info("Load targets vocab with %d targets..." % config.target_size)
 
     return config
 
@@ -371,11 +422,12 @@ def main():
             "gpu": enable_gpu,
         }
         # TODO: Use other / clean project
-        wandb.init(project="selfrepair", config=cfg_desc)
+        wandb.init(project="DeepMutants", entity="cedricrupb",
+                     config=cfg_desc)
 
     #Logging
     if config.wandb:
-        log_backend = WandbBackend()
+        log_backend = WandbBackend(wandb)
     else:
         log_backend = LogBackend()
 
@@ -390,6 +442,8 @@ def main():
 
     if len(config.trained_model_path) > 0:
         model = load_checkpoint(config, model, config.trained_model_path)
+
+    if config.wandb: wandb.watch(model)
 
     if config.do_train:
         logger.info(f"Training {config.model_name} ({format_num(num_parameters)}) | path: {config.data_dir} | device: {config.device} | num_gpus: {config.n_gpu}  ")
@@ -508,8 +562,12 @@ class LogBackend(AvgBackend):
 
 class WandbBackend(AvgBackend):
 
+    def __init__(self, wandb_inst):
+        super().__init__()
+        self.wandb = wandb_inst
+
     def step(self):
-        wandb.log(self.avg_scores())
+        self.wandb.log(self.avg_scores())
         super().step()
 
 

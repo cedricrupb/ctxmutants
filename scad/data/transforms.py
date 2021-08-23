@@ -40,7 +40,34 @@ def load_varmisuse_example(D):
         }
     )
 
+
+# Support vocab loading --------------------------------------------------------------
+
+class VarMisuseWithVocab:
+
+    def __init__(self, targets):
+        self.targets = targets
+
+    def __call__(self, acode):
+        
+        labels = [self.targets[t] if t in self.targets else 0 for t in acode.tokens]
+
+        annotation = acode.annotations
+
+        error_index = min(i for i, t in enumerate(annotation["location"]) if t == 1)
+        if error_index > 0:
+            repair_target = min((i for i, t in enumerate(annotation["repair"]) if t == 1), default = -1)
+            
+            if repair_target < 0: # We do not know the repair
+                labels[error_index] = 1
+            else:
+                labels[error_index] = labels[repair_target]
     
+        else:
+            labels[error_index] = 1
+ 
+        acode.annotations["labels"] = labels
+        return acode
 
 
 # Data helpers -------------------------------------------------------------

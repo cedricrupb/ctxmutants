@@ -90,7 +90,7 @@ def random_pad(x, max_length):
     if length >= max_length: return x
 
     pad_size = max_length - length
-    pad_left = random.randint(pad_size)
+    pad_left = random.randint(0, pad_size)
 
     return pad(x, (pad_left, pad_size - pad_left))
 
@@ -110,7 +110,7 @@ def right_pad(x, max_length):
     return pad(x, (0, pad_size))
 
 
-def min_collate(batch, pad_fn=random_pad):
+def min_collate(batch, pad_fn=right_pad):
     """
     Pads all sequences to a common length
     """

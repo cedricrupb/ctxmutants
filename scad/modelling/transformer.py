@@ -2,7 +2,8 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 from transformers import BertModel, BertConfig
-from transformers.activations import get_activation
+
+import math
 
 from .utils import init_weights
 
@@ -101,13 +102,12 @@ class TransformerEncoder(nn.Module):
                     token_type_ids=None):
 
         subtoken = self.embeddings(tokens)
-        hidden   = subtoken
 
         if hasattr(self, "embedding_proj"):
-            hidden = self.embedding_proj(hidden)
+            subtoken = self.embedding_proj(subtoken)
 
         token_encoding = self.encoder(
-            inputs_embeds = hidden,
+            inputs_embeds = subtoken,
             attention_mask = attention_mask,
             position_ids = position_ids,
             token_type_ids = token_type_ids

@@ -8,7 +8,8 @@ class DetectionConfig:
                     max_length=128,
                     dropout=0.1,
                     encoder_type="transformer",
-                    pad_token_id=0):
+                    pad_token_id=0,
+                    decoder_vocab_size=0):
         self.vocab_size = vocab_size
         self.embedding_size = embedding_size
         self.hidden_size = hidden_size
@@ -17,6 +18,7 @@ class DetectionConfig:
         self.dropout = dropout
         self.encoder_type = encoder_type
         self.pad_token_id = pad_token_id
+        self.decoder_vocab_size = decoder_vocab_size
 
     def update(self, kwargs):
         for k, v in kwargs.items():
@@ -34,12 +36,14 @@ class TransformerConfig(DetectionConfig):
                     max_length=128,
                     dropout=0.1,
                     sinoid=False,
-                    pad_token_id=0):
+                    pad_token_id=0,
+                    decoder_vocab_size = 0):
         super().__init__(
             vocab_size, embedding_size,
             hidden_size, num_layers,
             max_length, dropout, "transformer",
-            pad_token_id
+            pad_token_id,
+            decoder_vocab_size
         )
 
         self.ffn_size = ffn_size
