@@ -7,7 +7,7 @@ from tqdm import tqdm
 from glob import glob
 from collections import namedtuple
 
-from scad import mutation as M
+from ctxmutants import mutation as M
 
 # Location mask ---------------------------------------
 

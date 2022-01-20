@@ -17,17 +17,17 @@ from glob import glob
 
 from config import train_config_from_args
 
-from scad.data import Vocabulary, BPEEncoder
-from scad.data import BufferingDataset
+from ctxmutants.data import Vocabulary, BPEEncoder
+from ctxmutants.data import BufferingDataset
 
-from scad.data import VarMisuseDataset, SingleTokenBugDataset
+from ctxmutants.data import VarMisuseDataset, SingleTokenBugDataset
 
-from scad.modelling import TransformerConfig
-from scad.modelling import TransformerEncoder
+from ctxmutants.modelling import TransformerConfig
+from ctxmutants.modelling import TransformerEncoder
 
-from scad.modelling import VarMisuseModel
-from scad.modelling import LocateRepairModel
-from scad.modelling import MaskedRepairModel
+from ctxmutants.modelling import VarMisuseModel
+from ctxmutants.modelling import LocateRepairModel
+from ctxmutants.modelling import MaskedRepairModel
 
 from transformers import get_linear_schedule_with_warmup
 

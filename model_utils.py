@@ -4,11 +4,11 @@ import run_train as rt
 
 from javalang.parser import JavaSyntaxError
 
-from scad import mutation as M
-from scad.tokenize import func_tokenize
+from ctxmutants import mutation as M
+from ctxmutants.tokenize import func_tokenize
 
-from scad.data import Vocabulary, BPEEncoder
-from scad.data import transforms as T
+from ctxmutants.data import Vocabulary, BPEEncoder
+from ctxmutants.data import transforms as T
 from config import TrainConfig
 
 
