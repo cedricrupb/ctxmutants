@@ -3,30 +3,32 @@
 [[**PAPER**]() | [**DATASETS**](https://zenodo.org/record/5547824) | [**ARTIFACT**](https://zenodo.org/record/5547853)]
 > Generate more realistics mutations with contextual mutants
 
-A core problem of neural bug detectors is the requirement for realistic training examples. While it is easy to obtain likely correct code (e.g. from public realeases of open source projects), obtaining realistic bugs is much harder. Therefore, neural bug detectors commonly rely on plain random mutations to produce buggy code.
+A core problem of neural bug detection is the requirement for realistic training examples. While it is easy to obtain likely correct code (e.g. from public realeases of open source projects), obtaining realistic bugs to learn from is much harder. Therefore, neural bug detection commonly relies on plain random mutations to produce buggy code.
 
-This repository provides a simple alternative to plain random mutants to produce more realistic mutants.
+This repository provides a simple alternative to plain random mutants by producing more realistic mutants
+with contextual mutations.
 
-**Key idea:** contextual mutations that select mutations based on the likelihood to appear in realistic code using a masked language model.
+**Key idea:** Employ contextual mutators that select mutants based on the likelihood of appearing in realistic code 
+by using a masked language model.
 
-Paper is coming soon.
+Paper will be available soon.
 
 ## Quickstart
-To quickly start with contextual mutations, we provide a [**demo**](https://colab.research.google.com/github/cedricrupb/ctxmutants/blob/main/demo.ipynb) notebook. This also highlights the key functions in this library. If you want to use this repository as a library, please read on.
+To quickly start with contextual mutations, we provide a [**demo**](https://colab.research.google.com/github/cedricrupb/ctxmutants/blob/main/demo.ipynb) notebook. This also highlights the key functionalities of this library. If you want to employ this repository as a library for your own project, please read on.
 
 **Note:** While it is not necessary, it is recommended to run
 the notebook on a machine with a GPU.
 
 ## Installation
-To run the code maintained in this repository, Python 3.7 and PyTorch 1.8 has to be installed. Further dependencies can be easily installed via Pip
+To run the code contained in this repository, Python 3.7 and PyTorch 1.8 is required. Further dependencies can be easily installed via Pip
 ```bash
 $ pip install requirements.txt
 ```
 
 ## Usage
-This repository contains all code necessary to replicate our experiments. Therefore,
-the repository contains code for tokenization, different mutation types and also
-training scripts for neural bug detection and repair. In the following the structure of the repository:
+This repository contains all code necessary to replicate our paper experiments. Therefore,
+this repository contains code for tokenization, different mutation types and also
+training scripts for neural bug detection and repair. In the following we present the structure of this repository:
 ```
 ctxmutants
     |`-- data # Utils for data preprocessing
@@ -46,7 +48,7 @@ apply_mutations.py # Create mutants on an unmutated dataset
 evaluate_mutators.py # Based on real bug fixes, evaluate the quality of a mutator
 run_train.py # Run training on dataset preprocessed by apply_mutations.py
 ```
-All scripts list all config options with a description. A full description how to preprocess a dataset or how to run the train script is coming soon.
+All scripts list config options together with a description. A full description how to preprocess a dataset or how to run the train script will be coming soon.
 
 ## Project info
 
