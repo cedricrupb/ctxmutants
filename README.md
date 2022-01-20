@@ -1,5 +1,5 @@
 # Learning Realistic Bugs: Bug Creation for Neural Bug Detectors
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/cedricrupb/ctxmutants/main/demo.ipynb) 
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/cedricrupb/ctxmutants/blob/main/demo.ipynb) 
 [[**PAPER**]() | [**DATASETS**](https://zenodo.org/record/5547824) | [**ARTIFACT**](https://zenodo.org/record/5547853)]
 > Generate more realistics mutations with contextual mutants
 
@@ -12,7 +12,7 @@ This repository provides a simple alternative to plain random mutants to produce
 Paper is coming soon.
 
 ## Quickstart
-To quickly start with contextual mutations, we provide a [**demo**](https://colab.research.google.com/github/cedricrupb/ctxmutants/main/demo.ipynb) notebook. This also highlights the key functions in this library. If you want to use this repository as a library, please read on.
+To quickly start with contextual mutations, we provide a [**demo**](https://colab.research.google.com/github/cedricrupb/ctxmutants/blob/main/demo.ipynb) notebook. This also highlights the key functions in this library. If you want to use this repository as a library, please read on.
 
 **Note:** While it is not necessary, it is recommended to run
 the notebook on a machine with a GPU.
