@@ -37,7 +37,8 @@ class TransformerConfig(DetectionConfig):
                     dropout=0.1,
                     sinoid=False,
                     pad_token_id=0,
-                    decoder_vocab_size = 0):
+                    decoder_vocab_size = 0,
+                    token_annotate = False,):
         super().__init__(
             vocab_size, embedding_size,
             hidden_size, num_layers,
@@ -49,3 +50,4 @@ class TransformerConfig(DetectionConfig):
         self.ffn_size = ffn_size
         self.num_heads = num_heads
         self.sinoid = sinoid
+        self.token_annotate = token_annotate

@@ -16,6 +16,7 @@ class TokenTypes(IntEnum):
     LIT_STRING= 10
     LIT_NUMBER= 11
     NAME      = 12
+    ASSIGN    = 13
 
 
 
@@ -48,7 +49,7 @@ class TokenizationState:
 
     def indent(self): self.add("#INDENT#")
 
-    def dedent(self): self.add("#DEDENT#")
+    def dedent(self): self.add("#UNINDENT#")
 
     def newline(self): self.add("#NEWLINE#")
 

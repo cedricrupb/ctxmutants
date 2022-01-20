@@ -1,8 +1,11 @@
 
 ## Weak binary operator mutation ###########################################################################
 
-BINARY_OPS = {">", "<", "==", ">=", "<=", "!=", "&&", "||",
-                "+", "-", "*", "/", "&", "|", "%", "<<", ">>" , ">>>", "^"}
+BINARY_OPS = {">", "<", "==", ">=", "<=", "!=",
+             "&&", "||",
+             "+", "-", "*", "/", 
+             "&", "|", "%", 
+             "<<", ">>" , ">>>", "^"}
 
 def weak_binary_mutation(tokens, location, types = None):
     replace_token = tokens[location]
@@ -54,5 +57,22 @@ def strong_binary_mutation(tokens, location, types = None):
     replacements = BINARY_MUTATION_RULES[replace_token]
 
     return {r: 1 / len(replacements) for r in replacements}
+
+
+# Java location mask ----------------------------------------------------------------
+
+def _is_string_concat(types, pos):
+    return types[pos - 1] == 10 or types[pos + 1] == 10
+
+def binary_location_mask(tokens, types):
+    candidates = [i for i, t in enumerate(types) if t == 7]
+
+    # instanceof is a binary operator but there is no replacement
+    candidates = filter(lambda x: tokens[x] != "instanceof", candidates)
+
+    # There is no real replacement for string concats
+    candidates = filter(lambda x: not _is_string_concat(types, x), candidates)
+
+    return list(candidates)
 
 

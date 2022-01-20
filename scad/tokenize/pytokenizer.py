@@ -91,7 +91,10 @@ class NodeTokenizer:
         self.state.add(";")
 
     def tokenize_Colon(self, node):
-        self.state.add(",")
+        self.state.add(":")
+
+    def tokenize_Newline(self, node):
+        self.state.newline()
 
     # Brackets ----------------------------------------------------------------
     def tokenize_LeftParen(self, node):
@@ -264,7 +267,6 @@ class NodeTokenizer:
             lastarg = len(node.args) - 1
             for i, arg in enumerate(node.args):
                 self.tokenize(arg)
-                if i < lastarg: state.add(",")
 
             state.add(")")
 
@@ -276,7 +278,8 @@ class NodeTokenizer:
             if len(node.star) > 0: state.add(node.star)
             keyword = node.keyword
             if keyword is not None:
-                self.tokenize(keyword)
+                with self.state.new_ctx("NAME"):
+                    self.tokenize(keyword)
             equal = node.equal
             if equal is MaybeSentinel.DEFAULT and node.keyword is not None:
                 state.add("=")
@@ -390,7 +393,7 @@ class NodeTokenizer:
         
         comma = node.comma
         if comma is MaybeSentinel.DEFAULT:
-            state.add(",")
+            pass
         else:
             self.tokenize(comma)
 
@@ -402,7 +405,7 @@ class NodeTokenizer:
         
         comma = node.comma
         if comma is MaybeSentinel.DEFAULT:
-            state.add(",")
+            pass
         else:
             self.tokenize(comma)
 
@@ -415,7 +418,7 @@ class NodeTokenizer:
         
         comma = node.comma
         if comma is MaybeSentinel.DEFAULT:
-            state.add(",")
+            pass
         else:
             self.tokenize(comma)
 
@@ -427,7 +430,7 @@ class NodeTokenizer:
         
         comma = node.comma
         if comma is MaybeSentinel.DEFAULT:
-            state.add(",")
+            pass
         else:
             self.tokenize(comma)
 
@@ -540,8 +543,9 @@ class NodeTokenizer:
         self.tokenize(node.slice)
 
         comma = node.comma
-        if comma is MaybeSentinel.DEFAULT :
-            self.state.add(",")
+        if comma is MaybeSentinel.DEFAULT:
+            #self.state.add(",")
+            pass
         else:
             self.tokenize(comma)
 
@@ -729,7 +733,6 @@ class NodeTokenizer:
                 self.tokenize(node.returns)
             
             state.add(":")
-            state.newline()
 
         self.tokenize(node.body)
 
@@ -855,6 +858,9 @@ class NodeTokenizer:
 
         with self.state.new_ctx("FUNC_CALL"):
             self.tokenize(node.decorator)
+        
+        if node.trailing_whitespace:
+            self.tokenize(node.trailing_whitespace.newline)
 
 
     def tokenize_Parameters(self, node):
@@ -957,6 +963,7 @@ class NodeTokenizer:
     def tokenize_IndentedBlock(self, node):
         state = self.state
 
+        state.newline()
         state.indent()
         for statement in node.body:
             self.tokenize(statement)
@@ -966,12 +973,16 @@ class NodeTokenizer:
     def tokenize_SimpleStatementLine(self, node):
         for statement in node.body:
             self.tokenize(statement)
-        self.state.newline()
+
+        if node.trailing_whitespace:
+            self.tokenize(node.trailing_whitespace.newline)
 
     def tokenize_SimpleStatementSuite(self, node):
         for statement in node.body:
             self.tokenize(statement)
-        self.state.newline()
+
+        if node.trailing_whitespace:
+            self.tokenize(node.trailing_whitespace.newline)
 
     def tokenize_ImportFrom(self, node):
 

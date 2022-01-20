@@ -20,15 +20,14 @@ from config import train_config_from_args
 from scad.data import Vocabulary, BPEEncoder
 from scad.data import BufferingDataset
 
-from scad.data import VarMisuseDataset, VarMisuseVocabDataset
+from scad.data import VarMisuseDataset, SingleTokenBugDataset
 
 from scad.modelling import TransformerConfig
 from scad.modelling import TransformerEncoder
 
 from scad.modelling import VarMisuseModel
-from scad.modelling import VarMisuseTargetedModel
-from scad.modelling import VarMisusePointerModel
 from scad.modelling import LocateRepairModel
+from scad.modelling import MaskedRepairModel
 
 from transformers import get_linear_schedule_with_warmup
 
@@ -56,7 +55,8 @@ def create_transformer_config(config):
             ffn_size=2048,
             max_length=config.max_test_length,
             sinoid=config.sinoid_pos,
-            decoder_vocab_size=config.target_size
+            decoder_vocab_size=config.target_size,
+            token_annotate = config.annotation_mask
         )
 
     if config.model_size == "debug":
@@ -67,7 +67,8 @@ def create_transformer_config(config):
             ffn_size=64,
             max_length=config.max_test_length,
             sinoid=config.sinoid_pos,
-            decoder_vocab_size=config.target_size
+            decoder_vocab_size=config.target_size,
+            token_annotate = config.annotation_mask
         )
 
 
@@ -104,7 +105,7 @@ def init_train_loader(config, data_path):
     files = [f for f in files if os.path.isfile(f)]
 
     if config.target_size > 0:
-        dataset = VarMisuseVocabDataset(files, config.encoder, config.targets, cutoff = config.bpe_cutoff)
+        dataset = SingleTokenBugDataset(files, config.encoder, config.targets, cutoff = config.bpe_cutoff)
     else:
         dataset = VarMisuseDataset(files, config.encoder, cutoff = config.bpe_cutoff)
 
@@ -123,13 +124,28 @@ def init_train_loader(config, data_path):
     return loader
 
 
-def init_test_loader(config, data_path, full_run = False):
-    logger.info("Index dev dataset...")
+def _init_multiple_test_loader(config, data_path, full_run = False):
+    
+    sub_folder = [d for d in glob(os.path.join(data_path, "*")) if os.path.isdir(d)]
+    
+    return {
+        os.path.basename(path): init_test_loader(config, path, full_run)
+        for path in sub_folder
+    }
+
+
+
+def init_test_loader(config, data_path, full_run = False, multiple_datasets = False):
+
+    if multiple_datasets:
+        return _init_multiple_test_loader(config, data_path, full_run = full_run)
+
+    logger.info("Index dev dataset from %s..." % data_path)
     files = glob(os.path.join(data_path, "*"))
     files = [f for f in files if os.path.isfile(f)]
 
     if config.target_size > 0:
-        dataset = VarMisuseVocabDataset(files, config.encoder, config.targets, cutoff = config.bpe_cutoff)
+        dataset = SingleTokenBugDataset(files, config.encoder, config.targets, cutoff = config.bpe_cutoff)
     else:
         dataset = VarMisuseDataset(files, config.encoder, cutoff = config.bpe_cutoff)
 
@@ -157,18 +173,19 @@ def setup_model(config):
     if config.model_type == "pointer":
         logger.info("Apply Transformer with the Locate Pointer head...")
         return VarMisuseModel(t_config, t_encoder)
-    
-    if config.model_type == "targeted_model":
-        logger.info("Apply Transformer with the Targeted Repair head...")
-        return VarMisuseTargetedModel(t_config, t_encoder)
-
-    if config.model_type == "pointer_net":
-        logger.info("Apply Transformer with the PointerNet head...")
-        return VarMisusePointerModel(t_config, t_encoder)
-
+  
     if config.model_type == "loc_repair":
         logger.info("Apply Transformer with generic localization and repair head...")
+
+        if config.target_size == 0:
+            logger.warning("You use the generalized loc repair model without specifying a target vocabulary")
+            logger.warning("It might be more efficient to use the standard locate pointer head (Model type: pointer)")
+
         return LocateRepairModel(t_config, t_encoder)
+
+    if config.model_type == "repair":
+        logger.info("Apply Transformer with repair head only...")
+        return MaskedRepairModel(t_config, t_encoder)
 
     raise ValueError("Unknown model type: %s" % config.model_type)
 
@@ -235,7 +252,7 @@ def train(config, model):
     logger.info("Setup train loop...")
     
     train_loader = init_train_loader(config, config.train_dir)
-    dev_loader = init_test_loader(config, config.validate_dir)
+    dev_loader = init_test_loader(config, config.validate_dir, multiple_datasets = config.multiple_eval_datasets)
 
     model = model.to(config.device)
 
@@ -301,7 +318,7 @@ def train(config, model):
 
         if (num_samples - last_eval) >= config.num_samples_validate:
             validate(config, model, dev_loader)
-            val_score = config.validate_report["localization_acc"]
+            val_score = config.validate_report["repair_acc"]
             save_checkpoint(config, model, ts, val_score)
             config.train_report.step()
             last_eval = num_samples
@@ -339,12 +356,17 @@ def validate_step(config, log, model, batch):
 def validate(config, model, loader):
     logger.info("Validate model...")
 
-    with tqdm(total=config.num_validate_samples) as pbar:
-        for batch in loader:
-            add_position_ids(config, batch)
-            batch = batch.to(config.device)
-            validate_step(config, config.validate_report, model, batch)
-            pbar.update(batch.input_ids.shape[0])
+    if not isinstance(loader, dict): loader = {"main": loader}
+
+    for validate_key, val_loader in loader.items():
+        validate_report = Report(ChildBackend(validate_key, config.validate_report.backend))
+
+        with tqdm(total=config.num_validate_samples) as pbar:
+            for batch in val_loader:
+                add_position_ids(config, batch)
+                batch = batch.to(config.device)
+                validate_step(config, validate_report, model, batch)
+                pbar.update(batch.input_ids.shape[0])
 
 
 def test(config, model):
@@ -369,8 +391,8 @@ def test(config, model):
     return log.avg_scores()
 
 # Main setup -------------------------------------------------------------------
-def init_config():
-    config = train_config_from_args()
+def init_config(config = None):
+    if config is None: config = train_config_from_args()
 
     # Test length should be larger equal max sequence length
     config.max_test_length = max(config.max_sequence_length, config.max_test_length)
@@ -387,6 +409,7 @@ def init_config():
 
     config.encoder = BPEEncoder(vocabulary)
     config.target_size = 0
+    config.targets     = None
 
     # Targets
     if len(config.target_path) > 0:

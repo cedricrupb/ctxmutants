@@ -128,189 +128,6 @@ class VarMisuseModel(VarMisuseBaseModel):
         return self.head(encoding)
 
 
-
-class _LocalizationHead(nn.Module):
-
-    def __init__(self, config):
-        super().__init__()
-
-        self.ff_in = nn.Linear(config.hidden_size + config.embedding_size, config.embedding_size)
-        self.ff_out = nn.Linear(config.embedding_size, 1)
-
-        self.apply(init_weights)
-    
-    def forward(self, context_embed, token_embed):
-        
-        hidden = torch.cat([context_embed, token_embed], dim=-1)
-        hidden = self.ff_in(hidden)
-        hidden = nn.Tanh()(hidden)
-        logits = self.ff_out(hidden)
-
-        return logits.transpose(2, 1)
-
-
-class _CopyRepairHead(nn.Module):
-
-    def __init__(self, config):
-        super().__init__()
-    
-    def forward(self, error_tokens, hidden):
-        repair_logits = torch.bmm(error_tokens.unsqueeze(1), hidden.transpose(2, 1))
-        repair_logits /= math.sqrt(error_tokens.shape[1]) # Stabilizes loss
-
-        return repair_logits
-
-
-class VarMisuseTargetedModel(VarMisuseBaseModel):
-
-    def __init__(self, config, encoder):
-        super().__init__(config, encoder)
-
-        self.loc_head    = _LocalizationHead(config)
-        self.repair_head = _CopyRepairHead(config)
-
-    def loc_repair_logits(self, tokens, position_ids = None, labels = None):
-        attention_mask = tokens.sum(dim=2).clamp_(0, 1)
-
-        context, tokens = self.encoder(
-            tokens = tokens,
-            attention_mask = attention_mask.bool(),
-            position_ids = position_ids
-        )
-
-        loc_logits = self.loc_head(context, tokens)
-        
-        if labels is not None: # We are training
-            locate_mask = labels[:, 0, :].bool()
-        else: # We are at inference
-            locate = loc_logits.argmax(dim=1)
-            locate_mask = F.one_hot(locate, num_classes=locate.shape[1]).bool()
-
-        error_hidden = context[locate_mask]
-        repair_logits = self.repair_head(error_hidden, context)
-     
-        assert loc_logits.shape == repair_logits.shape, "Location shape differs from repair shape (%s != %s)" % (str(loc_logits.shape), str(repair_logits.shape))
-       
-        return torch.cat([loc_logits, repair_logits], dim = 1)
-
-
-class _FFN(nn.Module):
-
-    def __init__(self, config):
-        super().__init__()
-        self.config = config
-
-        self.dense  = nn.Linear(config.hidden_size, config.hidden_size)
-        self.ln     = nn.LayerNorm(config.hidden_size, eps=1e-12)
-        self.output = nn.Linear(config.hidden_size, config.decoder_vocab_size, bias = False)
-
-        self.apply(init_weights)
-    
-    def forward(self, hidden):
-        hidden = self.dense(hidden)
-        hidden = get_activation("gelu")(hidden)
-        hidden = self.ln(hidden)
-        return self.output(hidden)
-
-
-class _PointerHead(nn.Module):
-
-    def __init__(self, config):
-        super().__init__()
-        self.config = config
-        self.decoder = _FFN(config)
-
-
-    def forward(self, error_tokens, hidden, pointer_labels = None, error_repair_labels = None, token_mask = None):
-
-        # Equivalent to attention distribution in Pointer Gen
-        repair_logits = torch.bmm(error_tokens.unsqueeze(1), hidden.transpose(2, 1))
-        repair_logits /= math.sqrt(error_tokens.shape[1])
-
-        if token_mask is not None: repair_logits = _mask(repair_logits, token_mask.unsqueeze(1))
-
-        if error_repair_labels is not None:
-            vocab_logits  = self.decoder(error_tokens)
-
-            common_logits = torch.cat([repair_logits.squeeze(), vocab_logits], dim = 1)
-            common_logits = -nn.LogSoftmax(dim = 1)(common_logits)
-
-            ohe_labels = F.one_hot(error_repair_labels, num_classes=self.config.decoder_vocab_size)
-            ohe_labels[:, 1] = 0
-
-            labels = torch.cat([pointer_labels, ohe_labels], dim=1)
-            norm   = labels.sum(dim=-1)
-            
-            repair_loss = (common_logits * labels).sum(dim = -1) / (norm + 1e-9)
-            repair_loss = repair_loss.mean()
-        
-            return repair_loss, repair_logits
-
-        return None, repair_logits
-
-
-
-class VarMisusePointerModel(VarMisuseBaseModel):
-
-    def __init__(self, config, encoder):
-        super().__init__(config, encoder)
-
-        self.loc_head    = _LocalizationHead(config)
-        self.repair_head = _PointerHead(config)
-
-    def forward(self, tokens, token_mask = None, position_ids = None, labels = None):
-        
-        attention_mask = tokens.sum(dim=2).clamp_(0, 1)
-
-        context, tokens = self.encoder(
-            tokens = tokens,
-            attention_mask = attention_mask.bool(),
-            position_ids = position_ids
-        )
-
-        loc_logits = self.loc_head(context, tokens)
-
-        error_repair_labels = None
-        
-        if labels is not None: # We are training
-            locate_mask = labels[:, 0, :].bool()
-
-            error_repair_labels = labels[:, 2, :]
-            error_repair_labels = error_repair_labels[locate_mask]
-        else: # We are at inference
-            locate = loc_logits.argmax(dim=1)
-            locate_mask = F.one_hot(locate, num_classes=locate.shape[1]).bool()
-
-        error_hidden = context[locate_mask]
-        repair_loss, repair_logits = self.repair_head(error_hidden, context,
-                                                         labels[:, 1, :], error_repair_labels, token_mask)
-
-        assert loc_logits.shape == repair_logits.shape, "Location shape differs from repair shape (%s != %s)" % (str(loc_logits.shape), str(repair_logits.shape))
-
-        prediction = torch.cat([loc_logits, repair_logits], dim = 1)
-
-        # Calculate loss for localization
-
-        # Mask prediction
-        if token_mask is not None:
-            prediction = _mask(loc_logits, token_mask)
-
-        # Calculate a loss if necessary
-        if labels is not None:
-            loc_labels = labels[:, 0, :]
-            log_probs = nn.LogSoftmax(dim=1)(loc_logits.squeeze())
-            norm = loc_labels.sum(dim=-1, keepdim = True)
-
-            per_token_loss = (-loc_labels * log_probs) / (norm + 1e-9)
-            loc_loss = per_token_loss.sum(dim=-1)
-            loc_loss = loc_loss.mean()
-
-            return loc_loss + repair_loss, prediction
-
-
-        return prediction
-
-
 # General model that works with inner repairs and localization --------------------------------
 
 
@@ -320,7 +137,6 @@ class _LocateHead(nn.Module):
         super().__init__()
 
         self.ffn_in  = nn.Linear(2 * config.hidden_size, config.hidden_size)
-        self.ln      = nn.LayerNorm(config.hidden_size, eps=1e-12)
         self.ffn_out = nn.Linear(config.hidden_size, 1) 
 
         self.apply(init_weights)
@@ -333,10 +149,9 @@ class _LocateHead(nn.Module):
         diff_vector = token_embed - context_embed
         diff_vector = torch.cat([context_embed, diff_vector], dim = 2)
         hidden = self.ffn_in(diff_vector)
-        hidden = get_activation("gelu")(hidden)
-        hidden = self.ln(hidden)
+        hidden = nn.Tanh()(hidden)
         hidden = self.ffn_out(hidden)
-        hidden = hidden.squeeze()
+        hidden = hidden.squeeze(-1)
 
         if token_mask is not None: hidden = _mask(hidden, token_mask)
 
@@ -369,7 +184,11 @@ class _RepairHead(nn.Module):
         repair_logits = torch.bmm(error_embed.unsqueeze(1), context_embed.transpose(2, 1)).squeeze()
         repair_logits /= math.sqrt(error_embed.shape[1])
 
-        if token_mask is not None: repair_logits = _mask(repair_logits, token_mask)
+        if len(repair_logits.shape) < 2: 
+            repair_logits = repair_logits.unsqueeze(0)
+
+        if token_mask is not None and not self.config.token_annotate:
+            repair_logits = _mask(repair_logits, token_mask)
 
         if labels is not None:
             repair_labels = labels[:, 1, :]
@@ -382,7 +201,7 @@ class _RepairHead(nn.Module):
 
             if labels is not None and target_labels is not None:
                 ohe_labels = F.one_hot(target_labels, num_classes=self.config.decoder_vocab_size)
-                ohe_labels[:, 1] = 0
+                ohe_labels[:, 0] = 0
                 repair_labels = torch.cat([repair_labels, ohe_labels], dim = 1)
 
         # Loss computation ---------------------------------------
@@ -399,7 +218,7 @@ class _RepairHead(nn.Module):
 
             return per_example_loss.mean(), repair_logits
         
-        return repair_logits
+        return None, repair_logits
 
 
 
@@ -445,7 +264,7 @@ class LocateRepairModel(nn.Module):
             target_labels = labels[:, 2, :]
             target_labels = target_labels[loc_labels.bool()]
             ohe_labels = F.one_hot(target_labels, num_classes=self.config.decoder_vocab_size)
-            ohe_labels[:, 1] = 0
+            ohe_labels[:, 0] = 0
             rep_labels = torch.cat([rep_labels, ohe_labels], dim = 1)
 
         target_probs   = (rep_labels * rep_probs).sum(dim=-1)
@@ -472,7 +291,8 @@ class LocateRepairModel(nn.Module):
         context_embed, token_embed = self.encoder(
             tokens = tokens,
             attention_mask = attention_mask.bool(),
-            position_ids = position_ids
+            position_ids = position_ids,
+            token_type_ids = token_mask if self.config.token_annotate else None,
         )
 
         locate_loss, locate_logits = self.locate_head(context_embed, 
@@ -487,11 +307,15 @@ class LocateRepairModel(nn.Module):
         if labels is not None: # We are training
             locate_mask = labels[:, 0, :].bool()
 
-            error_repair_labels = labels[:, 2, :]
-            error_repair_labels = error_repair_labels[locate_mask]
+            if self.config.decoder_vocab_size > 0:
+                assert labels.shape[1] >= 2, "If a target vocabulary is specified we expect that target labels are provided."
+
+                error_repair_labels = labels[:, 2, :]
+                error_repair_labels = error_repair_labels[locate_mask]
+
         else: # We are at inference
             locate = locate_logits.argmax(dim=1)
-            locate_mask = F.one_hot(locate, num_classes=locate.shape[1]).bool()
+            locate_mask = F.one_hot(locate, num_classes=tokens.shape[1]).bool()
 
         error_hidden = context_embed[locate_mask]
 
@@ -509,3 +333,90 @@ class LocateRepairModel(nn.Module):
             return locate_loss + repair_loss, (locate_logits, repair_logits)
 
         return (locate_logits, repair_logits)
+
+
+# Masked repair ----------------------------------------------------------------
+
+class MaskedRepairModel(nn.Module):
+
+    def __init__(self, config, encoder):
+        super().__init__()
+
+        self.config = config
+        self.encoder = encoder
+        self.repair_head = _RepairHead(config)
+
+    @torch.no_grad()
+    def score(self, repair_logits, labels):
+
+        # Repair mask
+        loc_labels =  labels[:, 0, :]
+        buggy_labels = 1 - loc_labels[:, 0]
+
+        # Repair scores
+        rep_probs = nn.Softmax(dim = 1)(repair_logits)
+        rep_labels = labels[:, 1, :]
+
+        if rep_probs.shape[1] != rep_labels.shape[1]:
+            target_labels = labels[:, 2, :]
+            target_labels = target_labels[loc_labels.bool()]
+            ohe_labels = F.one_hot(target_labels, num_classes=self.config.decoder_vocab_size)
+            ohe_labels[:, 1] = 0
+            rep_labels = torch.cat([rep_labels, ohe_labels], dim = 1)
+
+        target_probs   = (rep_labels * rep_probs).sum(dim=-1)
+        target_predict = target_probs.round()
+        target_acc = (target_predict * buggy_labels).sum() / (1e-9 + buggy_labels.sum())
+
+        return {
+            "repair_acc": target_acc.item()
+        }
+
+
+    def forward(self, tokens, token_mask = None, position_ids = None, labels = None, repair_mask = None):
+
+        attention_mask = tokens.sum(dim=2).clamp_(0, 1)
+
+        context_embed, _ = self.encoder(
+            tokens = tokens,
+            attention_mask = attention_mask.bool(),
+            position_ids = position_ids,
+            token_type_ids = token_mask if self.config.token_annotate else None,
+        )
+
+        # Either use the gold localization or the predicted to get the error position
+
+        error_repair_labels = None
+        
+        if labels is not None: # We are training
+            locate_mask = labels[:, 0, :].bool()
+
+            if self.training and self.config.decoder_vocab_size > 0:
+                assert labels.shape[1] >= 2, "If a target vocabulary is specified we expect that target labels are provided."
+
+                error_repair_labels = labels[:, 2, :]
+                error_repair_labels = error_repair_labels[locate_mask]
+
+        else: # We are at inference
+            if repair_mask is None:
+                raise ValueError("Location labels are required to identify mask position.")
+            locate_mask = repair_mask.bool()
+
+        error_hidden = context_embed[locate_mask]
+
+        # ----------------------------------------------------------------
+
+        repair_loss, repair_logits = self.repair_head(
+            error_hidden,
+            context_embed,
+            token_mask,
+            labels,
+            error_repair_labels
+        )
+
+        if labels is not None:
+            return repair_loss, repair_logits
+
+        return repair_logits
+
+

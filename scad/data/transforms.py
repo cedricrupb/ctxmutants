@@ -16,6 +16,9 @@ AnnotatedCode = collections.namedtuple('AnnotatedCode', ["tokens", "annotations"
 def to_annotated(D):
     return AnnotatedCode(D["tokens"], {"types": D["types"]})
 
+def load_tokens(tokens):
+    return AnnotatedCode(tokens, {})
+
 
 def load_varmisuse_example(D):
 
@@ -41,33 +44,59 @@ def load_varmisuse_example(D):
     )
 
 
-# Support vocab loading --------------------------------------------------------------
+def load_annotated_code(D):
 
-class VarMisuseWithVocab:
+    tokens = D["tokens"]
+    types  = D["types"]
 
-    def __init__(self, targets):
-        self.targets = targets
+    return AnnotatedCode(
+        tokens, {
+            "types": types
+        }
+    ) 
 
-    def __call__(self, acode):
-        
-        labels = [self.targets[t] if t in self.targets else 0 for t in acode.tokens]
 
-        annotation = acode.annotations
+# Locate Repair tasks + Vocab ----------------------------------------------------------------
 
-        error_index = min(i for i, t in enumerate(annotation["location"]) if t == 1)
-        if error_index > 0:
-            repair_target = min((i for i, t in enumerate(annotation["repair"]) if t == 1), default = -1)
-            
-            if repair_target < 0: # We do not know the repair
-                labels[error_index] = 1
-            else:
-                labels[error_index] = labels[repair_target]
+class BugExampleLoader:
+
+    def __init__(self, vocab = None):
+        self.vocab = vocab
+
+    def __call__(self, D):
+        tokens = D["tokens"]
+
+        error_locations = D["location"]
+        if len(error_locations) == 0: error_locations = [0]
     
-        else:
-            labels[error_index] = 1
- 
-        acode.annotations["labels"] = labels
-        return acode
+        repair_mask    = D["mask"]
+        repair_mask.append(0)
+
+        repair_targets = D["target"]
+
+        # Create general indexes
+        token_mask = [1 if i in repair_mask else 0 for i in range(len(tokens))]
+        error_index = [1 if i in error_locations else 0 for i in range(len(tokens))]
+        repair_index = [1 if t in repair_targets and token_mask[i] == 1 else 0
+                            for i, t in enumerate(tokens)]
+
+        annotations = {
+            "location": error_index,
+            "repair"  : repair_index,
+            "mask"    : token_mask,
+        }
+
+        if self.vocab is not None:
+            if len(repair_targets) == 0: repair_targets.append("[UNK]")
+
+            labels = list(tokens)
+            for i, l in enumerate(error_locations): labels[l] = repair_targets[i]
+
+            labels = [self.vocab[t] if t in self.vocab else 0 for t in labels]
+            annotations["labels"] = labels
+            
+        return AnnotatedCode(tokens, annotations)
+
 
 
 # Data helpers -------------------------------------------------------------
@@ -124,6 +153,8 @@ class SubwordEncode:
 
     def __call__(self, tokens):
         return list(map(self._subword_encode, tokens))
+
+
 
 # Annotated to data ----------------------------------------------------------------
 

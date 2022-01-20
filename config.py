@@ -12,6 +12,15 @@ class Configuration:
         for k, v in config_options.items():
             setattr(self, k, v)
 
+    def __repr__(self):
+        content = []
+
+        for k, v in self.__dict__.items():
+            if v is not None:
+                content.append((k, v))
+        
+        return "Config(%s)" % (", ".join(["%s=%s" % (str(k), str(v)) for k, v in content]))
+
 
 # Configuration ------------------------------------------------------------------
 
@@ -22,7 +31,7 @@ class TrainConfig(Configuration):
         self.model_name = model_name
         self.data_dir   = data_dir
 
-        self.model_type = "pointer"
+        self.model_type = "loc_repair"
         self.model_size = "great"
         
         self.do_train = False
@@ -51,6 +60,7 @@ class TrainConfig(Configuration):
         self.vocab_path = os.path.join(data_dir, "vocab.txt")
         self.trained_model_path = ""
         self.max_checkpoints = -1
+        self.multiple_eval_datasets = False
 
         self.overwrite_files = False
 
@@ -59,6 +69,7 @@ class TrainConfig(Configuration):
         self.target_path = ""
         self.random_offsets = False
         self.sinoid_pos = False
+        self.annotation_mask = False
 
 
         self.bpe_cutoff = 10
@@ -89,6 +100,7 @@ class InferenceConfig(Configuration):
         self.target_path = ""
         self.random_offsets = False
         self.sinoid_pos = False
+        self.annotation_mask = False
         self.bpe_cutoff = 10
 
         self.no_cuda = False

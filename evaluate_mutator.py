@@ -6,15 +6,8 @@ import math
 import numpy as np
 
 from tqdm import tqdm
-from scad.mutation import weak_binary_mutation, strong_binary_mutation
-from scad.mutation import weak_varmisuse_mutation, strong_varmisuse_mutation
 
-NAME2MUT = {
-    "weak_binary": weak_binary_mutation,
-    "strong_binary": strong_binary_mutation,
-    "weak_varmisuse": weak_varmisuse_mutation,
-    "strong_varmisuse": strong_varmisuse_mutation,
-}
+from apply_mutation import MutationCandidate, load_mutation
 
 # Scorings -----------------------------
 
@@ -38,8 +31,8 @@ NAME2SCORE = {
 
 def _repair_example(example):
     tokens = example["tokens"]
-    location = example["locations"][0]
-    target = example["targets"][0]
+    location = example["location"][0]
+    target = example["target"][0]
 
     mutation_target = tokens[location]
     tokens[location] = target
@@ -48,7 +41,8 @@ def _repair_example(example):
 
 
 def resampling_prob(mutator, tokens, location, mutation_target, type = None):
-    mutation_dist = mutator(tokens, location, type)
+    candidate = MutationCandidate(tokens, type, None, location)
+    mutation_dist = mutator([candidate])[0]
 
     try:
         return mutation_dist[mutation_target]
@@ -68,25 +62,27 @@ def evaluate_mutation(mutation, example, scoring_fn = inverse_brier_score):
 def main():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("mutation")
     parser.add_argument("evaluation_path")
 
     parser.add_argument("--result_path")
 
     parser.add_argument("--score", default = "inverse_brier")
     parser.add_argument("--lang", default = "java")
+
+    # For the mutator
+    parser.add_argument("--mutation_type", default = "binary")
+    parser.add_argument("--mutation_strength", default = "weak")
+    parser.add_argument("--mutation_vocab")
+    parser.add_argument("--repair_model")
+
     args = parser.parse_args()
 
-    if args.mutation not in NAME2MUT:
-        raise ValueError("Unknown mutation %s"  % args.mutation)
-
-    if args.score not in NAME2SCORE:
-        raise ValueError("Unknown mutation %s"  % args.score)
-
-    print("Run test for mutator %s on test set %s" % (args.mutation, args.evaluation_path))
-
-    mutator = NAME2MUT[args.mutation]
+    mutator = load_mutation(args)
     scoring = NAME2SCORE[args.score]
+
+    if args.repair_model: args.mutation_strength = "contextual"
+
+    print("Run test for mutator (%s, %s) on test set %s" % (args.mutation_strength, args.mutation_type, args.evaluation_path))
 
     results = []
 
@@ -96,9 +92,11 @@ def main():
     total = sum(1 for _ in open(args.evaluation_path, "r"))
 
     with open(args.evaluation_path, "r") as line_stream:
-        for line in tqdm(line_stream, total = total):
+        T = tqdm(line_stream, total = total)
+        for line in T:
             task = json.loads(line)
             results.append( evaluate_mutation(mutator, task, scoring) )
+            T.set_description("Exp. Score: %f" % np.mean(results))
     
     print("Evaluation result for: %s" % args.evaluation_path)
     print("Evaluated examples: %d" % len(results))
