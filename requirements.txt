@@ -1,0 +1,7 @@
+torch==1.8.0
+transformers
+fasttext
+numpy
+esprima
+javalang
+libcst
